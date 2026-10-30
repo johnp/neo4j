@@ -59,7 +59,7 @@ case class DistinctSlottedPipe(
 
       state.query.resources.trace(seen)
 
-      override def produceNext(): Option[CypherRow] = {
+      override def produceNext(): CypherRow = {
         while (input.hasNext) {
           val next: CypherRow = input.next()
 
@@ -67,12 +67,12 @@ case class DistinctSlottedPipe(
           if (seen.add(key)) {
             // Found unseen key! Set it as the next element to yield, and exit
             groupingExpression.project(next, key)
-            return Some(next)
+            return next
           }
         }
         seen.close()
         seen = null
-        None
+        null
       }
 
       override protected[this] def closeMore(): Unit = if (seen != null) seen.close()

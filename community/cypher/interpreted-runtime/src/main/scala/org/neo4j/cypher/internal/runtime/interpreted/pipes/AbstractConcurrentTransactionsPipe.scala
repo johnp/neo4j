@@ -188,7 +188,7 @@ abstract class AbstractConcurrentTransactionsPipe(
       }
     }
 
-    final override def produceNext(): Option[CypherRow] = {
+    final override def produceNext(): CypherRow = {
       Debug.log(ConcurrentTransactions.ProduceNext(this.toString))
       logVerboseStatus()
 
@@ -215,13 +215,15 @@ abstract class AbstractConcurrentTransactionsPipe(
             }
           } else if (!awaitPendingRetries() && !hasAvailableInput) {
             Debug.log(ConcurrentTransactions.NoMoreRowsToPrefetch(this.toString))
-            return None
+            return null
           }
           maybeEnqueueTasks()
         }
       }(!hasAvailableOutputRow)
       Debug.log(ConcurrentTransactions.OutputtingRow(this.toString))
-      Some(currentOutputIterator.next())
+      // hasAvailableOutputRow above guarantees hasNext, so next() cannot throw here. Do not
+      // wrap the row in Some.
+      currentOutputIterator.next()
     }
 
     final protected def hasPendingTasks: Boolean = pendingTaskCount > 0

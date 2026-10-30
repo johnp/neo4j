@@ -145,12 +145,12 @@ class RunQueryAtIterator(
     row
   }
 
-  def produceNext(): Option[CypherRow] = {
+  def produceNext(): CypherRow = {
     error.foreach { throw _ }
     if (currentIndex < buffer.size) {
       val row = buffer.get(currentIndex)
       currentIndex += 1
-      Some(row)
+      row
     } else if (moreAvailable) {
       buffer.clear()
       execution.request(batchSize)
@@ -158,7 +158,7 @@ class RunQueryAtIterator(
       currentIndex = 0
       produceNext()
     } else {
-      None
+      null
     }
   }
 

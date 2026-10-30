@@ -63,7 +63,7 @@ case class DistinctSlottedSinglePrimitivePipe(
 
       state.query.resources.trace(seenWrapper)
 
-      override def produceNext(): Option[CypherRow] = {
+      override def produceNext(): CypherRow = {
         while (input.hasNext) { // Let's pull data until we find something not already seen
           val next = input.next()
           val key = next.getLongAt(offset)
@@ -71,13 +71,13 @@ case class DistinctSlottedSinglePrimitivePipe(
             // Found something! Set it as the next element to yield, and exit
             val outputValue = expression(next, state)
             setInSlot(next, outputValue)
-            return Some(next)
+            return next
           }
         }
         seenWrapper.close()
         seen = null
         seenWrapper = null
-        None
+        null
       }
 
       override protected[this] def closeMore(): Unit = if (seenWrapper != null) seenWrapper.close()

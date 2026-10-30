@@ -57,7 +57,7 @@ case class OrderedDistinctSlottedSinglePrimitivePipe(
     new PrefetchingIterator[CypherRow] {
       private var currentOrderedGroupingValue: Long = -1
 
-      override def produceNext(): Option[CypherRow] = {
+      override def produceNext(): CypherRow = {
         while (input.hasNext) { // Let's pull data until we find something not already seen
           val next = input.next()
           val groupingValue = next.getLongAt(offset)
@@ -66,11 +66,11 @@ case class OrderedDistinctSlottedSinglePrimitivePipe(
             // Found something! Set it as the next element to yield, and exit
             val outputValue = expression(next, state)
             setInSlot(next, outputValue)
-            return Some(next)
+            return next
           }
         }
 
-        None
+        null
       }
 
       override protected[this] def closeMore(): Unit = input.close()

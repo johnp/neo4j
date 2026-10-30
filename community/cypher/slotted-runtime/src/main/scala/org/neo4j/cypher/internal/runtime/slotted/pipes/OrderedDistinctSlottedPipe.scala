@@ -50,7 +50,7 @@ case class OrderedDistinctSlottedPipe(
 
       state.query.resources.trace(seen)
 
-      override def produceNext(): Option[CypherRow] = {
+      override def produceNext(): CypherRow = {
         while (input.hasNext) {
           val next: CypherRow = input.next()
 
@@ -67,12 +67,12 @@ case class OrderedDistinctSlottedPipe(
             // Found unseen key! Set it as the next element to yield, and exit
             orderedGroupingExpression.project(next, orderedGroupingValue)
             unorderedGroupingExpression.project(next, unorderedGroupingValue)
-            return Some(next)
+            return next
           }
         }
         seen.close()
         seen = null
-        None
+        null
       }
 
       override protected[this] def closeMore(): Unit = if (seen != null) seen.close()
@@ -97,7 +97,7 @@ case class AllOrderedDistinctSlottedPipe(
     new PrefetchingIterator[CypherRow] {
       private var currentOrderedGroupingValue: AnyValue = _
 
-      override def produceNext(): Option[CypherRow] = {
+      override def produceNext(): CypherRow = {
         while (input.hasNext) {
           val next: CypherRow = input.next()
 
@@ -107,10 +107,10 @@ case class AllOrderedDistinctSlottedPipe(
             currentOrderedGroupingValue = groupingValue
             // Found unseen key! Set it as the next element to yield, and exit
             groupingExpression.project(next, groupingValue)
-            return Some(next)
+            return next
           }
         }
-        None
+        null
       }
 
       override protected[this] def closeMore(): Unit = input.close()

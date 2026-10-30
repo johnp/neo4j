@@ -107,14 +107,14 @@ case class NodeHashJoinSlottedSingleNodePipe(
       private var matches: util.Iterator[CypherRow] = util.Collections.emptyIterator()
       private var currentRhsRow: CypherRow = _
 
-      override def produceNext(): Option[CypherRow] = {
+      override def produceNext(): CypherRow = {
         // If we have already found matches, we'll first exhaust these
         if (matches.hasNext) {
           val lhs = matches.next()
           val newRow = SlottedRow(slots)
           newRow.copyAllFrom(lhs)
           copyDataFromRow(rhsMappers, newRow, currentRhsRow, queryContext)
-          return Some(newRow)
+          return newRow
         }
 
         while (rhsInput.hasNext) {
@@ -132,7 +132,7 @@ case class NodeHashJoinSlottedSingleNodePipe(
         // We have produced the last row, close the probe table to release estimated heap usage
         probeTable.close()
 
-        None
+        null
       }
 
       override protected[this] def closeMore(): Unit = probeTable.close()

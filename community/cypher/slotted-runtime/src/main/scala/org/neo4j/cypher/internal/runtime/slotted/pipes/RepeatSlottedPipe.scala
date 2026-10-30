@@ -412,7 +412,7 @@ case class RepeatSlottedPipe(
         prevRepetitionGroupRelationships: HeapTrackingArrayList[ListValue],
         innerEndNode: Long,
         accumulatorValues: Array[AnyValue]
-      ): Some[CypherRow] = {
+      ): CypherRow = {
         RepeatSlottedPipe.writeResultColumns(
           prevRepetitionGroupNodes,
           prevRepetitionGroupRelationships,
@@ -424,7 +424,7 @@ case class RepeatSlottedPipe(
           reverseGroupVariableProjections,
           nodeInScope
         )
-        Some(rhsInnerRow)
+        rhsInnerRow
       }
 
       val startNode = getStartNodeFunction.applyAsLong(outerRow)
@@ -467,10 +467,10 @@ case class RepeatSlottedPipe(
           }
 
           @tailrec
-          def produceNext(): Option[CypherRow] = {
+          def produceNext(): CypherRow = {
             val firstRowOrNull = allocateZeroRepetitionResultRowOrNull()
             if (firstRowOrNull != null) {
-              Some(firstRowOrNull)
+              firstRowOrNull
             } else if (innerResult.hasNext) {
               val row = innerResult.next()
               val innerEndNode = row.getLongAt(innerEndSlot.offset)
@@ -523,7 +523,7 @@ case class RepeatSlottedPipe(
                 stackHead.close()
                 stackHead = null
               }
-              None
+              null
             }
           }
         }

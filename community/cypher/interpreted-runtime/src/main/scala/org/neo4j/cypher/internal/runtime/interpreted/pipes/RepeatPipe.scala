@@ -413,10 +413,10 @@ case class RepeatPipe(
             }
 
             @tailrec
-            def produceNext(): Option[CypherRow] = {
+            def produceNext(): CypherRow = {
               val firstRowOrNull = allocateZeroRepetitionResultRowOrNull()
               if (firstRowOrNull != null) {
-                Some(firstRowOrNull)
+                firstRowOrNull
               } else if (innerResult.hasNext) {
                 val row = innerResult.next()
                 val innerEndNode = castOrFail[VirtualNodeValue](row.getByName(innerEnd))
@@ -435,7 +435,7 @@ case class RepeatPipe(
                     innerEndNode,
                     stackHead.accumulatorValues
                   ))
-                  Some(resultRow)
+                  resultRow
                 } else {
                   produceNext()
                 }
@@ -458,7 +458,7 @@ case class RepeatPipe(
                 innerResult = inner.createResults(innerState).filter(filterRow(_, stackHead))
                 produceNext()
               } else {
-                None
+                null
               }
             }
           }
