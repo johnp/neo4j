@@ -94,9 +94,9 @@ class SlottedGroupingAggTable(
         val unorderedGroupingValue = entry.getKey
         val aggregateFunctions = entry.getValue
         val row = SlottedRow(slots)
-        if (state.initialContext.nonEmpty) {
+        if (state.initialContextRow ne null) {
           row.copyFrom(
-            state.initialContext.get,
+            state.initialContextRow,
             Math.min(argumentSize.nLongs, slots.numberOfLongs),
             Math.min(argumentSize.nReferences, slots.numberOfReferences)
           )

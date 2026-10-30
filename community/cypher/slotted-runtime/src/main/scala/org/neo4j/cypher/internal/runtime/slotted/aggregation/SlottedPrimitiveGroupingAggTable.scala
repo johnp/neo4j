@@ -83,9 +83,9 @@ class SlottedPrimitiveGroupingAggTable(
 
   private def createResultRow(groupingKey: LongArray, aggregateFunctions: Seq[AggregationFunction]): CypherRow = {
     val row = SlottedRow(slots)
-    if (state.initialContext.nonEmpty) {
+    if (state.initialContextRow ne null) {
       row.copyFrom(
-        state.initialContext.get,
+        state.initialContextRow,
         Math.min(argumentSize.nLongs, slots.numberOfLongs),
         Math.min(argumentSize.nReferences, slots.numberOfReferences)
       )

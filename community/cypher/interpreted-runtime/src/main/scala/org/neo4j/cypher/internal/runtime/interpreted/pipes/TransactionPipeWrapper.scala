@@ -162,6 +162,10 @@ trait TransactionPipeWrapper {
     val transactionId = innerTxContext.userTransactionId
     val entityTransformer = new CypherRowEntityTransformer(stateWithNewTransaction.query.entityTransformer)
 
+    // The inner iterator is fully consumed before the next outer row is processed, so the batch state
+    // can be reused and only its initial context needs to be swapped per row. This avoids allocating
+    // a new QueryState (and Some) for every outer row.
+    val innerState = stateWithNewTransaction
     var innerIterator: ClosingIterator[CypherRow] = null
     try {
       val batchIterator = outerRows.iterator()
@@ -175,7 +179,7 @@ trait TransactionPipeWrapper {
         outerRow.invalidateCachedProperties()
 
         val reboundRow = entityTransformer.copyWithEntityWrappingValuesRebound(outerRow)
-        val innerState = stateWithNewTransaction.withInitialContext(reboundRow)
+        innerState.setInitialContext(reboundRow)
 
         innerIterator = inner.createResults(innerState)
         innerIterator.foreach(f.apply) // Consume result before commit

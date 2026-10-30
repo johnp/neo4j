@@ -67,7 +67,7 @@ class QueryState(
   val queryMemoryTracker: QueryMemoryTracker,
   val memoryTrackerForOperatorProvider: MemoryTrackerForOperatorProvider,
   val decorator: PipeDecorator = NullPipeDecorator,
-  val initialContext: Option[CypherRow] = None,
+  initialContextOption: Option[CypherRow] = None,
   val cachedIn: InCache = createDefaultInCache(),
   val indexComparatorFactory: IndexComparatorFactory,
   val lenientCreateRelationship: Boolean = false,
@@ -89,11 +89,39 @@ class QueryState(
   private[this] var lastCachedNotification: InternalNotification =
     if (!warnOnAggregationSkipNull) AggregationSkippedNull else null
 
+  // Mutable so that a state can be reused for several inner executions, e.g. one per outer row in a
+  // CALL { ... } IN TRANSACTIONS batch. See setInitialContext.
+  private[this] var _initialContext: CypherRow =
+    if (initialContextOption.isEmpty) null else initialContextOption.get
+
+  /**
+   * The initial context of this state, if any. Note that this is mutable on states that are reused
+   * across inner executions, see [[setInitialContext]].
+   */
+  def initialContext: Option[CypherRow] = Option(_initialContext)
+
+  /**
+   * The raw initial context, or null if there is none. Hot paths that only need to know whether
+   * there is a context should use this instead of [[initialContext]] to avoid allocating a `Some`.
+   */
+  private[cypher] def initialContextRow: CypherRow = _initialContext
+
+  /**
+   * Replaces the context that [[newRow]] and [[newRowWithArgument]] start from, without allocating a
+   * new state.
+   *
+   * Only safe to use when the previous initial context is no longer in use, i.e. after the previous
+   * inner execution has been fully consumed. Used by CALL { ... } IN TRANSACTIONS to reuse one state
+   * per batch instead of allocating one state per outer row.
+   */
+  private[cypher] def setInitialContext(row: CypherRow): this.type = {
+    _initialContext = row
+    this
+  }
+
+  // NOTE: simple null checks here to keep this allocation-free on the hot path
   def newRow(rowFactory: CypherRowFactory): CypherRow = {
-    initialContext match {
-      case Some(init) => rowFactory.copyWith(init)
-      case None       => rowFactory.newRow()
-    }
+    if (_initialContext eq null) rowFactory.newRow() else rowFactory.copyWith(_initialContext)
   }
 
   def newRuntimeNotification(notification: InternalNotification): Unit = {
@@ -109,10 +137,7 @@ class QueryState(
    * When running on the RHS of an Apply, this method will fill the new row with argument data
    */
   def newRowWithArgument(rowFactory: CypherRowFactory): CypherRow = {
-    initialContext match {
-      case Some(init) => rowFactory.copyArgumentOf(init)
-      case None       => rowFactory.newRow()
-    }
+    if (_initialContext eq null) rowFactory.newRow() else rowFactory.copyArgumentOf(_initialContext)
   }
 
   def getStatistics: QueryStatistics = query.getOptStatistics.getOrElse(QueryState.defaultStatistics)
