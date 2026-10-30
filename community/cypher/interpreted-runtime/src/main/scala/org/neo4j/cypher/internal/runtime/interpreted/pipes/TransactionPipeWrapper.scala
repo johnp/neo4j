@@ -47,6 +47,7 @@ import org.neo4j.kernel.api.exceptions.Status
 import org.neo4j.kernel.impl.util.collection.EagerBuffer
 import org.neo4j.kernel.impl.util.collection.EagerBuffer.createEagerBuffer
 import org.neo4j.memory.MemoryTracker
+import org.neo4j.values.AnyValue
 
 import java.util.concurrent.TimeUnit
 
@@ -539,8 +540,11 @@ object TransactionPipeWrapper {
   // Always copying the row should not be necessary. We could optimize this by first doing a dry-run to detect if anything actually needs to be rebound.
   class CypherRowEntityTransformer(entityTransformer: EntityTransformer) {
 
+    // Eta-expand the method reference once per batch instead of once per row
+    private val rebind: AnyValue => AnyValue = entityTransformer.rebindEntityWrappingValue
+
     def copyWithEntityWrappingValuesRebound(row: CypherRow): CypherRow =
-      row.copyMapped(entityTransformer.rebindEntityWrappingValue)
+      row.copyMapped(rebind)
   }
 
   def evaluateBatchSize(batchSize: Expression, state: QueryState): Long = {
