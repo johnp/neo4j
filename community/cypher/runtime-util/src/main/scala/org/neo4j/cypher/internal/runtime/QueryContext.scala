@@ -91,6 +91,9 @@ import org.neo4j.kernel.impl.query.ConstituentTransactionFactory
 import org.neo4j.kernel.impl.query.FunctionInformation
 import org.neo4j.kernel.impl.query.QueryExecutionConfiguration
 import org.neo4j.kernel.impl.query.statistic.StatisticProvider
+import org.neo4j.kernel.impl.util.NodeEntityWrappingNodeValue
+import org.neo4j.kernel.impl.util.PathWrappingPathValue
+import org.neo4j.kernel.impl.util.RelationshipEntityWrappingValue
 import org.neo4j.logging.InternalLogProvider
 import org.neo4j.memory.HeapEstimatorCacheConfig
 import org.neo4j.memory.MemoryTracker
@@ -105,6 +108,8 @@ import org.neo4j.values.ElementIdMapper
 import org.neo4j.values.ValueMapper
 import org.neo4j.values.storable.TextValue
 import org.neo4j.values.storable.Value
+import org.neo4j.values.virtual.ListValue
+import org.neo4j.values.virtual.MapValue
 import org.neo4j.values.virtual.VirtualNodeValue
 import org.neo4j.values.virtual.VirtualRelationshipValue
 
@@ -1044,11 +1049,36 @@ class RelationshipValueHit(val inner: RelationshipValueIndexCursor, val values: 
 }
 
 trait EntityTransformer {
+
+  /**
+   * Returns a copy of the value with all entity-wrapping values rebound to the entities of the
+   * current transaction.
+   */
   def rebindEntityWrappingValue(value: AnyValue): AnyValue
+
+  /**
+   * Dry-run counterpart of [[rebindEntityWrappingValue]]: true if the value contains an
+   * entity-wrapping value that [[rebindEntityWrappingValue]] would replace.
+   *
+   * Used to skip row copies that would come out unchanged. Implementations must stay consistent
+   * with [[rebindEntityWrappingValue]] and may return true conservatively.
+   */
+  def canRebind(value: AnyValue): Boolean = value match {
+    case _: NodeEntityWrappingNodeValue     => true
+    case _: RelationshipEntityWrappingValue => true
+    case _: PathWrappingPathValue           => true
+    // The transformer also recurses into maps and lists. Treat non-empty containers as rebindable
+    // instead of scanning them: skipping the copy of entity-free rows is the common win, while
+    // values nested in a container are comparatively rare.
+    case m: MapValue  => !m.isEmpty
+    case l: ListValue => !l.isEmpty
+    case _            => false
+  }
 }
 
 class NoopEntityTransformer extends EntityTransformer {
   override def rebindEntityWrappingValue(value: AnyValue): AnyValue = value
+  override def canRebind(value: AnyValue): Boolean = false
 }
 
 case class IndexInformation(

@@ -195,6 +195,18 @@ final case class SlottedRow(slots: SlotConfiguration) extends CypherRow {
     clone
   }
 
+  override def anyRefValueSatisfies(predicate: AnyValue => Boolean): Boolean = {
+    var i = 0
+    while (i < refs.length) {
+      val value = refs(i)
+      if (value != null && predicate(value)) {
+        return true
+      }
+      i += 1
+    }
+    false
+  }
+
   private def transformRefs(func: AnyValue => AnyValue): Unit = {
     val allSlots = slots.slots
     var i = 0

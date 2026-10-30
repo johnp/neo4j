@@ -445,6 +445,47 @@ class SlottedRowTest extends CypherFunSuite {
     mutatingLeftDoesNotAffectRight(newRow, row, slots.cachedPropOffset(prop("n", "cache3")))
   }
 
+  test("anyRefValueSatisfies - should visit reference slots in order and stop at the first match") {
+    val slots = SlotConfigurationBuilder.empty
+      .newLong("long1", nullable = false, CTNode)
+      .newReference("key1", nullable = true, CTAny)
+      .newReference("key2", nullable = true, CTAny)
+      .newReference("key3", nullable = true, CTAny)
+      .build()
+
+    val row = SlottedRow(slots)
+    row.setLongAt(slots.longOffset("long1"), 123L)
+    row.setRefAt(slots.refOffset("key1"), stringValue("a"))
+    row.setRefAt(slots.refOffset("key2"), stringValue("b"))
+    row.setRefAt(slots.refOffset("key3"), stringValue("c"))
+
+    var visited = List.empty[AnyValue]
+    row.anyRefValueSatisfies { value =>
+      visited = visited :+ value
+      value == stringValue("b")
+    } shouldBe true
+    visited shouldBe List(stringValue("a"), stringValue("b"))
+
+    row.anyRefValueSatisfies(_ => false) shouldBe false
+  }
+
+  test("anyRefValueSatisfies - should skip uninitialized reference slots") {
+    val slots = SlotConfigurationBuilder.empty
+      .newReference("key1", nullable = true, CTAny)
+      .newReference("key2", nullable = true, CTAny)
+      .build()
+
+    val row = SlottedRow(slots)
+    row.setRefAt(slots.refOffset("key2"), stringValue("b"))
+
+    var visited = List.empty[AnyValue]
+    row.anyRefValueSatisfies { value =>
+      visited = visited :+ value
+      false
+    } shouldBe false
+    visited shouldBe List(stringValue("b"))
+  }
+
   test("copyMapped - should transform values") {
     val slots = SlotConfigurationBuilder.empty
       .newLong("long1", nullable = false, CTNode)

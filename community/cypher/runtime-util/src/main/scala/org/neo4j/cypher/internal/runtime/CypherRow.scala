@@ -126,6 +126,13 @@ trait CypherRow extends ReadWriteRow with Measurable {
   /** Create a copy of this row, with all values transformed by the given function (including cached values)  */
   def copyMapped(func: AnyValue => AnyValue): CypherRow
 
+  /**
+   * @return true if any reference slot value of this row satisfies the given predicate.
+   *         Rows that cannot inspect their reference slots return true conservatively, so callers
+   *         using this as a dry-run never skip work they have to do.
+   */
+  def anyRefValueSatisfies(predicate: AnyValue => Boolean): Boolean = true
+
   def isNull(key: String): Boolean
 
   /**

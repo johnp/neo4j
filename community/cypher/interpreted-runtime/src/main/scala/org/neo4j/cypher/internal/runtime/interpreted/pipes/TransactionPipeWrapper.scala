@@ -27,6 +27,7 @@ import org.neo4j.cypher.internal.logical.plans.TransactionalPlan.RecoveryMode
 import org.neo4j.cypher.internal.runtime.ClosingIterator
 import org.neo4j.cypher.internal.runtime.CypherRow
 import org.neo4j.cypher.internal.runtime.EntityTransformer
+import org.neo4j.cypher.internal.runtime.NoopEntityTransformer
 import org.neo4j.cypher.internal.runtime.QueryStatistics
 import org.neo4j.cypher.internal.runtime.interpreted.commands.expressions.Expression
 import org.neo4j.cypher.internal.runtime.interpreted.pipes.RetryDecision.NotApplicable
@@ -537,14 +538,23 @@ object TransactionPipeWrapper {
   // Currently, replacing e.g. NodeEntityWrappingNodeValue with NodeReference causes failures downstream.
   // We can for example end up in PathValueBuilder, which assumes that we have NodeValue and not NodeReference.
   // We can also still get entity values with transaction references streaming in and out of procedures.
-  // Always copying the row should not be necessary. We could optimize this by first doing a dry-run to detect if anything actually needs to be rebound.
   class CypherRowEntityTransformer(entityTransformer: EntityTransformer) {
+
+    private val isNoop = entityTransformer.isInstanceOf[NoopEntityTransformer]
 
     // Eta-expand the method reference once per batch instead of once per row
     private val rebind: AnyValue => AnyValue = entityTransformer.rebindEntityWrappingValue
 
+    private def needsRebind(row: CypherRow): Boolean =
+      !isNoop && row.anyRefValueSatisfies(entityTransformer.canRebind)
+
+    /**
+     * @return the row with its entity-wrapping values rebound to the current transaction, or the row
+     *         itself if it contains no entity-wrapping values. Callers must therefore not rely on
+     *         getting a fresh instance and must copy the row if the inner query could mutate it.
+     */
     def copyWithEntityWrappingValuesRebound(row: CypherRow): CypherRow =
-      row.copyMapped(rebind)
+      if (needsRebind(row)) row.copyMapped(rebind) else row
   }
 
   def evaluateBatchSize(batchSize: Expression, state: QueryState): Long = {
