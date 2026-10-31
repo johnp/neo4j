@@ -152,6 +152,24 @@ class CypherRowEntityTransformerTest extends CypherFunSuite {
     noopTransformer.copyWithEntityWrappingValuesRebound(row) should be theSameInstanceAs row
   }
 
+  test("offers no transform when the row contains no entity-wrapping values") {
+    val row = SlottedRow(slots)
+    row.setRefAt(0, Values.longValue(42L))
+
+    transformer.rebindTransformIfNeeded(row) shouldBe null
+  }
+
+  test("offers the rebind transform when the row contains a node entity") {
+    val nodeValue = wrappingNodeValue()
+    val row = SlottedRow(slots)
+    row.setRefAt(0, nodeValue)
+
+    val transform = transformer.rebindTransformIfNeeded(row)
+
+    transform should not be null
+    transform(nodeValue) shouldBe reboundNode
+  }
+
   private def wrappingNodeValue(): NodeEntityWrappingNodeValue = {
     val node = mock[Node]
     when(node.getId).thenReturn(-1L)

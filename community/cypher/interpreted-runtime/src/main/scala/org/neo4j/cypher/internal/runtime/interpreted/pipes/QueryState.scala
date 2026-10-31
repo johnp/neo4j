@@ -94,17 +94,32 @@ class QueryState(
   private[this] var _initialContext: CypherRow =
     if (initialContextOption.isEmpty) null else initialContextOption.get
 
+  // When the inner plan runs in a new transaction, entity-wrapping values of the outer row must be
+  // rebound. Applying that transform to every copied row would cost an extra row copy, so it is
+  // carried alongside the initial context and fused into the first argument copy. That copy then
+  // becomes the new initial context, so later copies reuse the already-rebound argument prefix.
+  // Cleared as soon as the context is materialized or consumed (see materializeInitialContext).
+  private[this] var _initialContextTransform: AnyValue => AnyValue = null
+
   /**
    * The initial context of this state, if any. Note that this is mutable on states that are reused
-   * across inner executions, see [[setInitialContext]].
+   * across inner executions, see [[setInitialContext]]. If a rebind transform is pending, reading
+   * this materializes it into a defensive copy first, so direct readers never see stale entities.
    */
-  def initialContext: Option[CypherRow] = Option(_initialContext)
+  def initialContext: Option[CypherRow] = {
+    materializeInitialContext()
+    Option(_initialContext)
+  }
 
   /**
    * The raw initial context, or null if there is none. Hot paths that only need to know whether
    * there is a context should use this instead of [[initialContext]] to avoid allocating a `Some`.
+   * A pending rebind transform is materialized first, exactly like [[initialContext]].
    */
-  private[cypher] def initialContextRow: CypherRow = _initialContext
+  private[cypher] def initialContextRow: CypherRow = {
+    materializeInitialContext()
+    _initialContext
+  }
 
   /**
    * Replaces the context that [[newRow]] and [[newRowWithArgument]] start from, without allocating a
@@ -114,14 +129,40 @@ class QueryState(
    * inner execution has been fully consumed. Used by CALL { ... } IN TRANSACTIONS to reuse one state
    * per batch instead of allocating one state per outer row.
    */
-  private[cypher] def setInitialContext(row: CypherRow): this.type = {
+  private[cypher] def setInitialContext(row: CypherRow): this.type = setInitialContext(row, null)
+
+  /**
+   * Same as [[setInitialContext]], but also carries a transform for the reference values of `row`.
+   *
+   * The transform is fused into the first [[newRowWithArgument]] call so that the argument row is
+   * copied once and rebound in place. That copy becomes the new initial context, so later argument
+   * consumers copy the already-rebound prefix instead of re-running the transform. If the inner
+   * plan reads [[initialContext]] directly (e.g. aggregations copy argument slots from it), the
+   * transform is applied to a defensive copy first.
+   *
+   * `transform` must be null or safe to apply to every reference slot, including null slots.
+   */
+  private[cypher] def setInitialContext(row: CypherRow, transform: AnyValue => AnyValue): this.type = {
     _initialContext = row
+    _initialContextTransform = transform
     this
+  }
+
+  private def materializeInitialContext(): Unit = {
+    val transform = _initialContextTransform
+    if ((transform ne null) && (_initialContext ne null)) {
+      _initialContext = _initialContext.copyMapped(transform)
+      _initialContextTransform = null
+    }
   }
 
   // NOTE: simple null checks here to keep this allocation-free on the hot path
   def newRow(rowFactory: CypherRowFactory): CypherRow = {
-    if (_initialContext eq null) rowFactory.newRow() else rowFactory.copyWith(_initialContext)
+    if (_initialContext eq null) rowFactory.newRow()
+    else {
+      materializeInitialContext()
+      rowFactory.copyWith(_initialContext)
+    }
   }
 
   def newRuntimeNotification(notification: InternalNotification): Unit = {
@@ -137,7 +178,19 @@ class QueryState(
    * When running on the RHS of an Apply, this method will fill the new row with argument data
    */
   def newRowWithArgument(rowFactory: CypherRowFactory): CypherRow = {
-    if (_initialContext eq null) rowFactory.newRow() else rowFactory.copyArgumentOf(_initialContext)
+    if (_initialContext eq null) rowFactory.newRow()
+    else {
+      val transform = _initialContextTransform
+      if (transform eq null) rowFactory.copyArgumentOf(_initialContext)
+      else {
+        val rebound = rowFactory.copyArgumentOfAndTransform(_initialContext, transform)
+        // The first copy has the argument prefix rebound. Use it as the context for later
+        // consumers so the transform runs once per outer row, not once per produced row.
+        _initialContext = rebound
+        _initialContextTransform = null
+        rebound
+      }
+    }
   }
 
   def getStatistics: QueryStatistics = query.getOptStatistics.getOrElse(QueryState.defaultStatistics)
@@ -477,6 +530,18 @@ trait CypherRowFactory {
 
   def copyArgumentOf(row: ReadableRow): CypherRow
 
+  /**
+   * Copies the argument slots of `row` into a new row and applies `transform` to the copied
+   * reference values in place.
+   *
+   * Factories that cannot fuse the two steps may return the result of [[copyArgumentOf]] followed
+   * by a separate transformation, as the default does. The default transforms every reference value
+   * of the copied row, so `transform` must tolerate null and non-argument slots. Implementations
+   * that can identify the argument prefix may restrict the transform to it.
+   */
+  def copyArgumentOfAndTransform(row: ReadableRow, transform: AnyValue => AnyValue): CypherRow =
+    copyArgumentOf(row).copyMapped(transform)
+
   def copyWith(row: ReadableRow): CypherRow
 
   def copyWith(row: ReadableRow, key: String, value: AnyValue): CypherRow
@@ -499,6 +564,15 @@ case class CommunityCypherRowFactory() extends CypherRowFactory {
   override def newRow(): CypherRow = CypherRow.empty
 
   override def copyArgumentOf(row: ReadableRow): CypherRow = copyWith(row)
+
+  // For map rows the argument row is the whole row, so a single mapped copy is enough.
+  override def copyArgumentOfAndTransform(row: ReadableRow, transform: AnyValue => AnyValue): CypherRow = row match {
+    case context: MapCypherRow =>
+      context.copyMapped(transform)
+
+    case x =>
+      throw InternalException.internalError(getClass.getSimpleName, s"Unexpected row type $x")
+  }
 
   // Not using polymorphism here, instead cast since the cost of being megamorhpic is too high
   override def copyWith(row: ReadableRow): CypherRow = row match {

@@ -178,8 +178,9 @@ trait TransactionPipeWrapper {
 
         outerRow.invalidateCachedProperties()
 
-        val reboundRow = entityTransformer.copyWithEntityWrappingValuesRebound(outerRow)
-        innerState.setInitialContext(reboundRow)
+        // Carrying the rebind transform on the state lets the argument copy apply it in place,
+        // instead of copying the row once for the rebind and once for the argument.
+        innerState.setInitialContext(outerRow, entityTransformer.rebindTransformIfNeeded(outerRow))
 
         innerIterator = inner.createResults(innerState)
         innerIterator.foreach(f.apply) // Consume result before commit
@@ -559,6 +560,13 @@ object TransactionPipeWrapper {
      */
     def copyWithEntityWrappingValuesRebound(row: CypherRow): CypherRow =
       if (needsRebind(row)) row.copyMapped(rebind) else row
+
+    /**
+     * @return the transform that rebinds the reference values of `row`, or null if no value needs
+     *         rebinding. Callers can fuse it into a copy they have to make anyway.
+     */
+    def rebindTransformIfNeeded(row: CypherRow): AnyValue => AnyValue =
+      if (needsRebind(row)) rebind else null
   }
 
   def evaluateBatchSize(batchSize: Expression, state: QueryState): Long = {

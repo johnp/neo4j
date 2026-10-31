@@ -217,6 +217,18 @@ final case class SlottedRow(slots: SlotConfiguration) extends CypherRow {
     }
   }
 
+  /**
+   * Applies `func` to the first `nRefs` reference slots in place. Used when a row was just created
+   * by copying an argument prefix; the remaining slots are still uninitialized.
+   */
+  private[slotted] def transformRefsInPlace(func: AnyValue => AnyValue, nRefs: Int): Unit = {
+    var i = 0
+    while (i < nRefs) {
+      refs(i) = func(refs(i))
+      i += 1
+    }
+  }
+
   override def copyFromOffset(
     input: ReadableRow,
     sourceLongOffset: Int,

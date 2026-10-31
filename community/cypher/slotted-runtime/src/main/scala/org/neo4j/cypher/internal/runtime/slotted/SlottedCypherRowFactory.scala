@@ -39,6 +39,13 @@ case class SlottedCypherRowFactory(slots: SlotConfiguration, argumentSize: SlotC
     newCtx
   }
 
+  override def copyArgumentOfAndTransform(init: ReadableRow, transform: AnyValue => AnyValue): CypherRow = {
+    val newCtx = SlottedRow(slots)
+    newCtx.copyFrom(init, nLongArgs, nRefArgs)
+    newCtx.transformRefsInPlace(transform, nRefArgs)
+    newCtx
+  }
+
   override def copyWith(row: ReadableRow): CypherRow = {
     val newCtx = SlottedRow(slots)
     newCtx.copyAllFrom(row)

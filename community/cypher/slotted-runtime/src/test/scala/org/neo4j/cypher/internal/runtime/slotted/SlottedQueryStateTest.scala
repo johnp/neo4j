@@ -24,6 +24,7 @@ import org.neo4j.cypher.internal.runtime.interpreted.QueryStateHelper
 import org.neo4j.cypher.internal.util.symbols.CTAny
 import org.neo4j.cypher.internal.util.symbols.CTNode
 import org.neo4j.cypher.internal.util.test_helpers.CypherFunSuite
+import org.neo4j.values.AnyValue
 import org.neo4j.values.storable.Values
 
 class SlottedQueryStateTest extends CypherFunSuite {
@@ -34,6 +35,14 @@ class SlottedQueryStateTest extends CypherFunSuite {
     .build()
 
   private val rowFactory = SlottedCypherRowFactory(slots, slots.size())
+
+  // The inner pipeline can have more slots than the argument prefix; those must stay untouched.
+  private val largerSlots = SlotConfigurationBuilder.empty
+    .newLong("a", nullable = false, CTNode)
+    .newReference("b", nullable = true, CTAny)
+    .newReference("c", nullable = true, CTAny)
+    .build()
+  private val largerRowFactory = SlottedCypherRowFactory(largerSlots, slots.size())
 
   test("newRowWithArgument should copy the current initial context") {
     val state = QueryStateHelper.empty
@@ -71,5 +80,86 @@ class SlottedQueryStateTest extends CypherFunSuite {
 
     firstInnerRow.getLongAt(0) shouldBe 1L
     secondInnerRow.getLongAt(0) shouldBe 2L
+  }
+
+  test("newRowWithArgument fuses the pending transform into the argument copy") {
+    val state = QueryStateHelper.empty
+    val outer = SlottedRow(slots)
+    outer.setLongAt(0, 42L)
+    outer.setRefAt(0, Values.longValue(1L))
+    state.setInitialContext(
+      outer,
+      (value: AnyValue) => {
+        if (value == null) throw new IllegalStateException("transform must only see copied argument slots")
+        if (value == Values.longValue(1L)) Values.longValue(2L) else value
+      }
+    )
+
+    val row = state.newRowWithArgument(largerRowFactory).asInstanceOf[SlottedRow]
+
+    row should not be theSameInstanceAs(outer)
+    row.getLongAt(0) shouldBe 42L
+    row.getRefAt(0) shouldBe Values.longValue(2L)
+    // The extra inner slot is not part of the argument prefix and must not be transformed
+    row.getRefAtWithoutCheckingInitialized(1) shouldBe null
+    outer.getRefAt(0) shouldBe Values.longValue(1L)
+  }
+
+  test("the pending transform is applied once per outer row, not once per argument copy") {
+    val state = QueryStateHelper.empty
+    val outer = SlottedRow(slots)
+    outer.setLongAt(0, 42L)
+    outer.setRefAt(0, Values.longValue(1L))
+    var calls = 0
+    state.setInitialContext(
+      outer,
+      (value: AnyValue) => {
+        calls += 1
+        if (value == Values.longValue(1L)) Values.longValue(2L) else value
+      }
+    )
+
+    val first = state.newRowWithArgument(rowFactory)
+    val second = state.newRowWithArgument(rowFactory)
+
+    calls shouldBe 1
+    first.getRefAt(0) shouldBe Values.longValue(2L)
+    second.getRefAt(0) shouldBe Values.longValue(2L)
+    outer.getRefAt(0) shouldBe Values.longValue(1L)
+  }
+
+  test("initialContextRow materializes the transform") {
+    val state = QueryStateHelper.empty
+    val outer = SlottedRow(slots)
+    outer.setLongAt(0, 42L)
+    outer.setRefAt(0, Values.longValue(1L))
+    state.setInitialContext(
+      outer,
+      (value: AnyValue) => {
+        if (value == Values.longValue(1L)) Values.longValue(2L) else value
+      }
+    )
+
+    state.initialContextRow.getRefAt(0) shouldBe Values.longValue(2L)
+    outer.getRefAt(0) shouldBe Values.longValue(1L)
+  }
+
+  test("reading the initial context materializes the transform in a fresh row") {
+    val state = QueryStateHelper.empty
+    val outer = SlottedRow(slots)
+    outer.setLongAt(0, 42L)
+    outer.setRefAt(0, Values.longValue(1L))
+    state.setInitialContext(
+      outer,
+      (value: AnyValue) => {
+        if (value == Values.longValue(1L)) Values.longValue(2L) else value
+      }
+    )
+
+    val materialized = state.initialContext.get
+
+    materialized should not be theSameInstanceAs(outer)
+    materialized.getRefAt(0) shouldBe Values.longValue(2L)
+    outer.getRefAt(0) shouldBe Values.longValue(1L)
   }
 }
