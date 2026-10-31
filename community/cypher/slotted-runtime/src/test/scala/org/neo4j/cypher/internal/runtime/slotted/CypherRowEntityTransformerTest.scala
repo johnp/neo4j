@@ -34,6 +34,10 @@ import org.neo4j.kernel.impl.util.PathWrappingPathValue
 import org.neo4j.kernel.impl.util.ValueUtils
 import org.neo4j.values.AnyValue
 import org.neo4j.values.storable.Values
+import org.neo4j.values.virtual.ListValue
+import org.neo4j.values.virtual.ListValueBuilder
+import org.neo4j.values.virtual.MapValue
+import org.neo4j.values.virtual.MapValueBuilder
 import org.neo4j.values.virtual.VirtualNodeValue
 import org.neo4j.values.virtual.VirtualRelationshipValue
 import org.neo4j.values.virtual.VirtualValues
@@ -85,12 +89,52 @@ class CypherRowEntityTransformerTest extends CypherFunSuite {
     result.getRefAt(0) shouldBe reboundPath
   }
 
-  test("conservatively copies a row containing a non-empty map of plain values") {
-    // The entity transformer recurses into containers, so a non-empty map or list may need rebinding
+  test("returns the same row instance for a non-empty map of plain values") {
     val row = SlottedRow(slots)
     row.setRefAt(0, VirtualValues.map(Array("key"), Array[AnyValue](Values.longValue(1L))))
 
-    transformer.copyWithEntityWrappingValuesRebound(row) should not be theSameInstanceAs(row)
+    transformer.copyWithEntityWrappingValuesRebound(row) should be theSameInstanceAs row
+  }
+
+  test("copies and rebinds a wrapped entity nested in a map") {
+    val row = SlottedRow(slots)
+    row.setRefAt(0, VirtualValues.map(Array("key"), Array[AnyValue](wrappingNodeValue())))
+
+    val result = transformer.copyWithEntityWrappingValuesRebound(row)
+
+    result should not be theSameInstanceAs(row)
+    result.getRefAt(0) shouldBe VirtualValues.map(Array("key"), Array[AnyValue](reboundNode))
+  }
+
+  test("copies and rebinds a wrapped entity nested in a list") {
+    val row = SlottedRow(slots)
+    row.setRefAt(0, VirtualValues.list(wrappingNodeValue()))
+
+    val result = transformer.copyWithEntityWrappingValuesRebound(row)
+
+    result should not be theSameInstanceAs(row)
+    result.getRefAt(0) shouldBe VirtualValues.list(reboundNode)
+  }
+
+  test("copies and rebinds a wrapped entity nested two levels deep") {
+    val row = SlottedRow(slots)
+    row.setRefAt(
+      0,
+      VirtualValues.map(Array("inner"), Array[AnyValue](VirtualValues.list(wrappingNodeValue())))
+    )
+
+    val result = transformer.copyWithEntityWrappingValuesRebound(row)
+
+    result should not be theSameInstanceAs(row)
+    result.getRefAt(0) shouldBe
+      VirtualValues.map(Array("inner"), Array[AnyValue](VirtualValues.list(reboundNode)))
+  }
+
+  test("returns the same row instance for a non-empty integral range") {
+    val row = SlottedRow(slots)
+    row.setRefAt(0, VirtualValues.range(1L, 10L, 1L))
+
+    transformer.copyWithEntityWrappingValuesRebound(row) should be theSameInstanceAs row
   }
 
   test("returns the same row instance if the row only contains empty containers") {
@@ -122,7 +166,15 @@ class CypherRowEntityTransformerTest extends CypherFunSuite {
     override def rebindEntityWrappingValue(value: AnyValue): AnyValue = value match {
       case _: NodeEntityWrappingNodeValue => reboundNode
       case _: PathWrappingPathValue       => reboundPath
-      case other                          => other
+      case m: MapValue if !m.isEmpty =>
+        val builder = new MapValueBuilder(m.size())
+        m.foreach((key, v) => builder.add(key, rebindEntityWrappingValue(v)))
+        builder.build()
+      case l: ListValue if !l.isEmpty =>
+        val builder = ListValueBuilder.newListBuilder(l.intSize())
+        l.forEach(v => builder.add(rebindEntityWrappingValue(v)))
+        builder.build()
+      case other => other
     }
   }
 }

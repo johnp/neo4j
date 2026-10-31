@@ -108,6 +108,7 @@ import org.neo4j.values.ElementIdMapper
 import org.neo4j.values.ValueMapper
 import org.neo4j.values.storable.TextValue
 import org.neo4j.values.storable.Value
+import org.neo4j.values.virtual.IntegralRangeListValue
 import org.neo4j.values.virtual.ListValue
 import org.neo4j.values.virtual.MapValue
 import org.neo4j.values.virtual.VirtualNodeValue
@@ -1067,12 +1068,42 @@ trait EntityTransformer {
     case _: NodeEntityWrappingNodeValue     => true
     case _: RelationshipEntityWrappingValue => true
     case _: PathWrappingPathValue           => true
-    // The transformer also recurses into maps and lists. Treat non-empty containers as rebindable
-    // instead of scanning them: skipping the copy of entity-free rows is the common win, while
-    // values nested in a container are comparatively rare.
-    case m: MapValue  => !m.isEmpty
-    case l: ListValue => !l.isEmpty
+    // The transformer returns integral ranges unchanged, so they never need rebinding.
+    case _: IntegralRangeListValue => false
+    // The transformer recurses into containers, so an entity-free container also comes out
+    // unchanged. Scanning is cheaper than rebuilding the container just to throw it away.
+    case m: MapValue  => mapContainsRebindableValue(m)
+    case l: ListValue => listContainsRebindableValue(l)
     case _            => false
+  }
+
+  private def mapContainsRebindableValue(map: MapValue): Boolean = {
+    val keys = map.keySet().iterator()
+    while (keys.hasNext) {
+      if (canRebind(map.get(keys.next()))) return true
+    }
+    false
+  }
+
+  private def listContainsRebindableValue(list: ListValue): Boolean = {
+    val size = list.intSize()
+    if (size <= 16) {
+      // Small lists are cheaper to index than to allocate an iterator per row.
+      var i = 0
+      while (i < size) {
+        if (canRebind(list.value(i.toLong))) return true
+        i += 1
+      }
+      false
+    } else {
+      // Large lists may have O(n) indexed access (set-backed lists, linked lists), which would
+      // make the dry-run quadratic per row. Iterate instead.
+      val values = list.iterator()
+      while (values.hasNext) {
+        if (canRebind(values.next())) return true
+      }
+      false
+    }
   }
 }
 
