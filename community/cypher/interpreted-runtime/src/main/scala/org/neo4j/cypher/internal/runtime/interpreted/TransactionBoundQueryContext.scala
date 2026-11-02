@@ -2018,17 +2018,48 @@ private[internal] class TransactionBoundReadQueryContext(
 
   class TransactionBoundEntityTransformer extends EntityTransformer {
 
-    private[this] val cache = collection.mutable.Map.empty[AnyValue, AnyValue]
+    // The transformer lives for one transaction/batch, so cached entities are bound to that
+    // transaction and must not outlive it. Direct entity wrappers are created freshly per row so
+    // their label/property caches cannot go stale after a write in the same transaction.
+    // List values keep their pre-existing value-level cache; a list that contains entity wrappers
+    // therefore still caches those wrappers. The list cache is capped at 1024 entries so a large
+    // batch cannot retain an unbounded number of lists.
+    private[this] lazy val entityCache = new EntityRebindCache(
+      id => entityAccessor.newNodeEntity(id),
+      id => entityAccessor.newRelationshipEntity(id)
+    )
+    private[this] val valueCache = collection.mutable.Map.empty[AnyValue, AnyValue]
+
+    // Virtual entities (negative ids, e.g. from db.schema.visualization) are rebound to a
+    // placeholder NodeEntity(negativeId); the original virtual entity is discarded (pre-existing).
+    // The placeholder wrapper has no label/property state to go stale, so it can be cached by the
+    // identity of the underlying entity. Identity keys avoid aliasing two distinct virtual entities
+    // that happen to share an id. Real entities use the entity cache above and get a fresh wrapper.
+    private[this] lazy val virtualEntityCache = new util.IdentityHashMap[AnyRef, AnyValue]()
+
+    private[this] val maxListCacheSize = 1024
+    private[this] val maxVirtualEntityCacheSize = 1024
 
     override def rebindEntityWrappingValue(value: AnyValue): AnyValue = value match {
 
+      case n: NodeEntityWrappingNodeValue if n.id() < 0 =>
+        cachedVirtualEntity(n.getEntity, ValueUtils.fromNodeEntity(entityAccessor.newNodeEntity(n.id())))
+
       case n: NodeEntityWrappingNodeValue =>
-        rebindNode(n.getEntity)
+        ValueUtils.fromNodeEntity(entityCache.node(n.getEntity))
+
+      case r: RelationshipEntityWrappingValue if r.id() < 0 =>
+        cachedVirtualEntity(
+          r.getEntity,
+          ValueUtils.fromRelationshipEntity(entityAccessor.newRelationshipEntity(r.id()))
+        )
 
       case r: RelationshipEntityWrappingValue =>
-        rebindRelationship(r.getEntity)
+        ValueUtils.fromRelationshipEntity(entityCache.relationship(r.getEntity))
 
       case p: PathWrappingPathValue =>
+        // Path implementations create fresh node/relationship proxies per iteration, so a cache
+        // keyed by those proxies would never hit. Rebind paths row by row.
         val nodeValues: util.List[VirtualNodeValue] =
           util.Arrays.asList(p.path().nodes().asScala.map(rebindNode).toArray: _*)
         val relValues = util.Arrays.asList(p.path().relationships().asScala.map(rebindRelationship).toArray: _*)
@@ -2043,16 +2074,33 @@ private[internal] class TransactionBoundReadQueryContext(
         i
 
       case l: ListValue if !l.isEmpty =>
-        cache.getOrElseUpdate(
-          l, {
+        valueCache.get(l) match {
+          case Some(value) => value
+          case None =>
             val builder = ListValueBuilder.newListBuilder(l.intSize())
             l.forEach(v => builder.add(rebindEntityWrappingValue(v)))
-            builder.build()
-          }
-        )
+            val value = builder.build()
+            if (valueCache.size < maxListCacheSize) {
+              valueCache.put(l, value)
+            }
+            value
+        }
 
       case other =>
         other
+    }
+
+    private def cachedVirtualEntity(key: AnyRef, value: => AnyValue): AnyValue = {
+      val cached = virtualEntityCache.get(key)
+      if (cached ne null) {
+        cached
+      } else {
+        val computed = value
+        if (virtualEntityCache.size() < maxVirtualEntityCacheSize) {
+          virtualEntityCache.put(key, computed)
+        }
+        computed
+      }
     }
 
     private def rebindNode(node: Node): VirtualNodeValue =
